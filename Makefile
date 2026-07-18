@@ -10,6 +10,9 @@ fmt:				## Format all files
 local-install:			## Build and install hishtory locally from the current directory
 	go build; ./hishtory install --skip-config-modification --skip-update-config-modification
 
+dev-build:			## Build hishtory locally with the commit hash and build timestamp baked in
+	go build -ldflags "$$(./scripts/dev-ldflags)"
+
 forcetest:			## Force running all tests without a test cache
 	go clean -testcache
 	make test

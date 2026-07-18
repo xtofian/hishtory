@@ -31,6 +31,9 @@ var statusCmd = &cobra.Command{
 			printOnlineStatus(config)
 		}
 		fmt.Printf("Commit Hash: %s\n", lib.GitCommit)
+		if lib.BuildTimestamp != "Unknown" {
+			fmt.Printf("Build Timestamp: %s\n", lib.BuildTimestamp)
+		}
 		if *configFlag {
 			y, err := yaml.Marshal(config)
 			if err != nil {

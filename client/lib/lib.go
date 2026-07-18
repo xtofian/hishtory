@@ -51,6 +51,10 @@ var ConfigFishContents string
 var (
 	Version   string = "Unknown"
 	GitCommit string = "Unknown"
+	// BuildTimestamp is the UTC time the binary was built, injected via -ldflags (see
+	// scripts/dev-ldflags and the `dev-build` Makefile target). Defaults to "Unknown" for builds
+	// that don't inject it (e.g. plain `go build` or release builds).
+	BuildTimestamp string = "Unknown"
 )
 
 // The batch size for the DB operations for importing history. Used by all types of imports.
