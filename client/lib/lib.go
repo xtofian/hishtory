@@ -212,6 +212,17 @@ func countLinesInFiles(filenames ...string) (int, error) {
 	return total, nil
 }
 
+// Hostname returns the hostname to record for history entries. If the HISHTORY_HOSTNAME environment
+// variable is set, its value is used as an override; this is useful for making history from sandboxes,
+// containers, or other ephemeral environments distinguishable (e.g. HISHTORY_HOSTNAME=coding-agent.sucia).
+// Otherwise it falls back to the OS hostname.
+func Hostname() (string, error) {
+	if override := os.Getenv("HISHTORY_HOSTNAME"); override != "" {
+		return override, nil
+	}
+	return os.Hostname()
+}
+
 // The number of entries where if we're importing more than this many entries, the import is likely to be
 // slow, and it is then worth displaying a progress bar.
 const NUM_IMPORTED_ENTRIES_SLOW int = 20_000
@@ -260,7 +271,7 @@ func ImportHistory(ctx context.Context, shouldReadStdin, force bool) (int, error
 	if err != nil {
 		return 0, err
 	}
-	hostname, err := os.Hostname()
+	hostname, err := Hostname()
 	if err != nil {
 		return 0, err
 	}
