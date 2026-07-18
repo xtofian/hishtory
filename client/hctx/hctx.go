@@ -185,32 +185,44 @@ func WithBackend(ctx context.Context, b shared.SyncBackend) context.Context {
 	return context.WithValue(ctx, BackendCtxKey, b)
 }
 
-type ClientConfig struct {
+// ClientState holds per-installation and volatile state. It is persisted separately from
+// ClientConfig (in STATE_PATH) so that the VCS-friendly config file stays stable across runs.
+// It contains secrets (UserSecret) and bookkeeping that changes on nearly every command, so it
+// must never be checked into version control.
+type ClientState struct {
 	// The user secret that is used to derive encryption keys for syncing history entries
-	UserSecret string `json:"user_secret" yaml:"-"`
+	UserSecret string `json:"user_secret"`
 	// Whether hishtory recording is enabled
-	IsEnabled bool `json:"is_enabled" yaml:"-"`
+	IsEnabled bool `json:"is_enabled"`
 	// A device ID used to track which history entry came from which device for remote syncing
-	DeviceId string `json:"device_id" yaml:"-"`
+	DeviceId string `json:"device_id"`
+	// Used for skipping history entries prefixed with a space in bash
+	LastPreSavedHistoryLine string `json:"last_presaved_history_line"`
+	// Used for skipping history entries prefixed with a space in bash
+	LastSavedHistoryLine string `json:"last_saved_history_line"`
+	// Used for uploading history entries that we failed to upload due to a missing network connection
+	HaveMissedUploads     bool  `json:"have_missed_uploads"`
+	MissedUploadTimestamp int64 `json:"missed_upload_timestamp"`
+	// Used for uploading deletion requests that we failed to upload due to a missed network connection
+	// Note that this is only applicable for deleting pre-saved entries. For interactive deletion, we just
+	// show the user an error message if they're offline.
+	PendingDeletionRequests []shared.DeletionRequest `json:"pending_deletion_requests"`
+	// Used for avoiding double imports of .bash_history
+	HaveCompletedInitialImport bool `json:"have_completed_initial_import"`
+}
+
+type ClientConfig struct {
+	// ClientState holds per-installation/volatile state persisted to a separate file (STATE_PATH).
+	// It is embedded so existing accessors (e.g. config.UserSecret) keep working via field promotion,
+	// but tagged json:"-"/yaml:"-" so it is excluded when (de)serializing the config file and the
+	// `hishtory status --config` yaml dump. State is persisted/loaded explicitly via STATE_PATH.
+	ClientState `json:"-" yaml:"-"`
 
 	// Backend configuration for syncing
 	// BackendType specifies the sync backend: "http" (default) or "s3"
 	BackendType string `json:"backend_type,omitempty"`
 	// S3Config holds configuration for the S3 backend (only used when BackendType is "s3")
 	S3Config *S3BackendConfig `json:"s3_config,omitempty"`
-	// Used for skipping history entries prefixed with a space in bash
-	LastPreSavedHistoryLine string `json:"last_presaved_history_line" yaml:"-"`
-	// Used for skipping history entries prefixed with a space in bash
-	LastSavedHistoryLine string `json:"last_saved_history_line" yaml:"-"`
-	// Used for uploading history entries that we failed to upload due to a missing network connection
-	HaveMissedUploads     bool  `json:"have_missed_uploads" yaml:"-"`
-	MissedUploadTimestamp int64 `json:"missed_upload_timestamp" yaml:"-"`
-	// Used for uploading deletion requests that we failed to upload due to a missed network connection
-	// Note that this is only applicable for deleting pre-saved entries. For interactive deletion, we just
-	// show the user an error message if they're offline.
-	PendingDeletionRequests []shared.DeletionRequest `json:"pending_deletion_requests" yaml:"-"`
-	// Used for avoiding double imports of .bash_history
-	HaveCompletedInitialImport bool `json:"have_completed_initial_import" yaml:"-"`
 	// Whether control-r bindings are enabled
 	ControlRSearchEnabled bool `json:"enable_control_r_search"`
 	// The set of columns that the user wants to be displayed
@@ -279,25 +291,126 @@ type S3BackendConfig struct {
 	Prefix string `json:"prefix,omitempty"`
 }
 
-func GetConfigContents() ([]byte, error) {
+// configFilePath returns the absolute path to the (post-split) config file.
+func configFilePath() (string, error) {
 	homedir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve homedir: %w", err)
+		return "", fmt.Errorf("failed to retrieve homedir: %w", err)
 	}
-	dat, err := os.ReadFile(path.Join(homedir, data.GetHishtoryPath(), data.CONFIG_PATH))
+	return path.Join(homedir, data.GetHishtoryPath(), data.CONFIG_PATH), nil
+}
+
+// stateFilePath returns the absolute path to the state file.
+func stateFilePath() (string, error) {
+	homedir, err := os.UserHomeDir()
 	if err != nil {
-		files, err := os.ReadDir(path.Join(homedir, data.GetHishtoryPath()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to read config file (and failed to list too): %w", err)
-		}
-		filenames := ""
-		for _, file := range files {
-			filenames += file.Name()
-			filenames += ", "
-		}
-		return nil, fmt.Errorf("failed to read config file (files in HISHTORY_PATH: %s): %w", filenames, err)
+		return "", fmt.Errorf("failed to retrieve homedir: %w", err)
 	}
-	return dat, nil
+	return path.Join(homedir, data.GetHishtoryPath(), data.STATE_PATH), nil
+}
+
+// legacyConfigFilePath returns the absolute path to the pre-split combined config file.
+func legacyConfigFilePath() (string, error) {
+	homedir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve homedir: %w", err)
+	}
+	return path.Join(homedir, data.GetHishtoryPath(), data.LEGACY_CONFIG_PATH), nil
+}
+
+// GetConfigContents returns the raw bytes of the user's persisted config. If the split config file
+// exists it is returned; otherwise, for a not-yet-migrated install, the legacy combined config file
+// is returned. This deliberately does NOT trigger migration and does NOT include the state file, so
+// that upgrade-detection logic (which checks whether a given key was ever explicitly persisted by the
+// user) inspects exactly what the user last wrote rather than a freshly-defaulted config.
+func GetConfigContents() ([]byte, error) {
+	configPath, err := configFilePath()
+	if err != nil {
+		return nil, err
+	}
+	dat, err := os.ReadFile(configPath)
+	if err == nil {
+		return dat, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		// The split config file doesn't exist yet; fall back to the legacy combined file if present.
+		legacyPath, lerr := legacyConfigFilePath()
+		if lerr != nil {
+			return nil, lerr
+		}
+		if legacyDat, lerr := os.ReadFile(legacyPath); lerr == nil {
+			return legacyDat, nil
+		}
+	}
+	homedir, herr := os.UserHomeDir()
+	if herr != nil {
+		return nil, fmt.Errorf("failed to read config file (and failed to get homedir too): %w", err)
+	}
+	files, lerr := os.ReadDir(path.Join(homedir, data.GetHishtoryPath()))
+	if lerr != nil {
+		return nil, fmt.Errorf("failed to read config file (and failed to list too): %w", err)
+	}
+	filenames := ""
+	for _, file := range files {
+		filenames += file.Name()
+		filenames += ", "
+	}
+	return nil, fmt.Errorf("failed to read config file (files in HISHTORY_PATH: %s): %w", filenames, err)
+}
+
+// maybeMigrateLegacyConfig performs a one-time migration from the pre-split combined config file
+// (LEGACY_CONFIG_PATH) to the split config.json + state.json files. If the new files already exist,
+// or the legacy file does not exist, it is a no-op. After a successful migration, the legacy file is
+// renamed to LEGACY_CONFIG_PATH+".old" so it is not migrated again but is preserved as a backup.
+func maybeMigrateLegacyConfig() error {
+	configPath, err := configFilePath()
+	if err != nil {
+		return err
+	}
+	statePath, err := stateFilePath()
+	if err != nil {
+		return err
+	}
+	legacyPath, err := legacyConfigFilePath()
+	if err != nil {
+		return err
+	}
+
+	// If either new file already exists, we've already migrated (or started fresh); do nothing.
+	_, configErr := os.Stat(configPath)
+	_, stateErr := os.Stat(statePath)
+	if configErr == nil || stateErr == nil {
+		return nil
+	}
+
+	// Only migrate if the legacy file exists.
+	legacyContents, err := os.ReadFile(legacyPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read legacy config file for migration: %w", err)
+	}
+
+	// The legacy file is a single flat JSON object mixing config and state fields. Unmarshal it into
+	// both the config fields and the embedded ClientState (the latter is json:"-" on ClientConfig, so
+	// it must be populated explicitly).
+	var config ClientConfig
+	if err := json.Unmarshal(legacyContents, &config); err != nil {
+		return fmt.Errorf("failed to parse legacy config file for migration: %w", err)
+	}
+	if err := json.Unmarshal(legacyContents, &config.ClientState); err != nil {
+		return fmt.Errorf("failed to parse legacy state fields for migration: %w", err)
+	}
+
+	// Write the split files, then rename the legacy file so we don't migrate again.
+	if err := writeConfigAndState(&config); err != nil {
+		return fmt.Errorf("failed to write split config/state during migration: %w", err)
+	}
+	if err := os.Rename(legacyPath, legacyPath+".old"); err != nil {
+		return fmt.Errorf("failed to rename legacy config file after migration: %w", err)
+	}
+	return nil
 }
 
 func GetDefaultColorScheme() ColorScheme {
@@ -309,14 +422,35 @@ func GetDefaultColorScheme() ColorScheme {
 }
 
 func GetConfig() (ClientConfig, error) {
-	data, err := GetConfigContents()
+	// Migrate a pre-split combined config into config.json + state.json before reading, so that
+	// GetConfigContents below sees the split config file.
+	if err := maybeMigrateLegacyConfig(); err != nil {
+		return ClientConfig{}, err
+	}
+	configContents, err := GetConfigContents()
 	if err != nil {
 		return ClientConfig{}, err
 	}
 	var config ClientConfig
-	err = json.Unmarshal(data, &config)
+	// The embedded ClientState is tagged json:"-", so this only populates the config fields.
+	err = json.Unmarshal(configContents, &config)
 	if err != nil {
 		return ClientConfig{}, fmt.Errorf("failed to parse config file: %w", err)
+	}
+	// Load the per-installation/volatile state from its separate file. A missing state file is
+	// tolerated (state stays zero-valued) so that a config.json committed to VCS and checked out on
+	// a fresh machine still works until the state file is (re)created.
+	statePath, err := stateFilePath()
+	if err != nil {
+		return ClientConfig{}, err
+	}
+	stateContents, err := os.ReadFile(statePath)
+	if err == nil {
+		if err := json.Unmarshal(stateContents, &config.ClientState); err != nil {
+			return ClientConfig{}, fmt.Errorf("failed to parse state file: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ClientConfig{}, fmt.Errorf("failed to read state file: %w", err)
 	}
 	config.KeyBindings = config.KeyBindings.WithDefaults()
 	if len(config.DisplayedColumns) == 0 {
@@ -352,37 +486,67 @@ func GetConfig() (ClientConfig, error) {
 }
 
 func SetConfig(config *ClientConfig) error {
-	serializedConfig, err := json.Marshal(config)
+	return writeConfigAndState(config)
+}
+
+// writeConfigAndState persists a ClientConfig across the two split files. The config file is
+// pretty-printed for readability/editability (it is meant to be VCS-friendly), while the state file
+// is written compactly since it changes on nearly every command. Each file is written atomically via
+// a staged temp file + rename.
+func writeConfigAndState(config *ClientConfig) error {
+	if err := MakeHishtoryDir(); err != nil {
+		return err
+	}
+
+	// Config: pretty-printed. The embedded ClientState is tagged json:"-", so it is excluded here.
+	serializedConfig, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize config: %w", err)
 	}
-	homedir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to retrieve homedir: %w", err)
-	}
-	err = MakeHishtoryDir()
+	configPath, err := configFilePath()
 	if err != nil {
 		return err
 	}
-	configPath := path.Join(homedir, data.GetHishtoryPath(), data.CONFIG_PATH)
-	stagedConfigPath := configPath + ".tmp-" + uuid.Must(uuid.NewRandom()).String()
-	err = os.WriteFile(stagedConfigPath, serializedConfig, 0o644)
-	if err != nil {
+	if err := atomicWriteFile(configPath, serializedConfig); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
-	err = os.Rename(stagedConfigPath, configPath)
+
+	// State: compact.
+	serializedState, err := json.Marshal(&config.ClientState)
 	if err != nil {
-		return fmt.Errorf("failed to replace config file with the updated version: %w", err)
+		return fmt.Errorf("failed to serialize state: %w", err)
+	}
+	statePath, err := stateFilePath()
+	if err != nil {
+		return err
+	}
+	if err := atomicWriteFile(statePath, serializedState); err != nil {
+		return fmt.Errorf("failed to write state: %w", err)
+	}
+	return nil
+}
+
+// atomicWriteFile writes data to path atomically by staging it in a temp file and renaming.
+func atomicWriteFile(destPath string, data []byte) error {
+	stagedPath := destPath + ".tmp-" + uuid.Must(uuid.NewRandom()).String()
+	if err := os.WriteFile(stagedPath, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(stagedPath, destPath); err != nil {
+		return fmt.Errorf("failed to replace %s with the updated version: %w", destPath, err)
 	}
 	return nil
 }
 
 func InitConfig() error {
-	homedir, err := os.UserHomeDir()
+	if err := maybeMigrateLegacyConfig(); err != nil {
+		return err
+	}
+	configPath, err := configFilePath()
 	if err != nil {
 		return err
 	}
-	_, err = os.Stat(path.Join(homedir, data.GetHishtoryPath(), data.CONFIG_PATH))
+	_, err = os.Stat(configPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return SetConfig(&ClientConfig{})
 	}
