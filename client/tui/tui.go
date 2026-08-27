@@ -79,6 +79,9 @@ type model struct {
 
 	// The search box for the query
 	queryInput textinput.Model
+	// Whether the default filter has been toggled off for this TUI instance (see the
+	// ToggleDefaultFilter keybinding).
+	defaultFilterDisabled bool
 	// The query to run. Reset to nil after it was run.
 	runQuery *string
 	// The previous query that was run.
@@ -133,10 +136,8 @@ func initialModel(ctx context.Context, shellName, initialQuery string) model {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	queryInput := textinput.New()
 	cfg := hctx.GetConf(ctx)
-	defaultFilter := cfg.DefaultFilter
-	if defaultFilter != "" {
-		queryInput.Prompt = "[" + defaultFilter + "] "
-	}
+	defaultFilter := cfg.GetDefaultFilter()
+	queryInput.Prompt = promptForDefaultFilter(defaultFilter, false)
 	queryInput.PromptStyle = queryInput.PlaceholderStyle
 	if defaultFilter == "" {
 		queryInput.Placeholder = "ls"
@@ -155,6 +156,25 @@ func initialModel(ctx context.Context, shellName, initialQuery string) model {
 	}
 	CURRENT_QUERY_FOR_HIGHLIGHTING = initialQuery
 	return model{ctx: ctx, spinner: s, isLoading: true, table: nil, tableEntries: []*data.HistoryEntry{}, runQuery: &initialQuery, queryInput: queryInput, help: help.New(), shellName: shellName, hasFinishedFirstLoad: false}
+}
+
+// promptForDefaultFilter returns the text input prompt to show for the given (already-expanded)
+// default filter: empty when there is no filter configured or it has been toggled off for this
+// TUI instance, otherwise the filter in brackets.
+func promptForDefaultFilter(defaultFilter string, disabled bool) string {
+	if disabled || defaultFilter == "" {
+		return ""
+	}
+	return "[" + defaultFilter + "] "
+}
+
+// activeDefaultFilter returns the default filter to apply to searches, or the empty string if
+// the default filter has been toggled off for this TUI instance.
+func (m model) activeDefaultFilter() string {
+	if m.defaultFilterDisabled {
+		return ""
+	}
+	return hctx.GetConf(m.ctx).GetDefaultFilter()
 }
 
 func (m model) Init() tea.Cmd {
@@ -211,11 +231,7 @@ func runQueryAndUpdateTable(m model, forceUpdateTable, maintainCursor bool) tea.
 		}
 		queryId := allocateQueryId()
 		conf := hctx.GetConf(m.ctx)
-		defaultFilter := conf.DefaultFilter
-		if m.queryInput.Prompt == "" {
-			// The default filter was cleared for this session, so don't apply it
-			defaultFilter = ""
-		}
+		defaultFilter := m.activeDefaultFilter()
 
 		// Kick off an async query to getRows() so that we can start our DB query in the background
 		// before bubbletea actually invokes our tea.Msg. This reduces latency between key presses
@@ -296,6 +312,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case key.Matches(msg, loadedKeyBindings.ToggleDefaultFilter):
+			m.defaultFilterDisabled = !m.defaultFilterDisabled
+			m.queryInput.Prompt = promptForDefaultFilter(hctx.GetConf(m.ctx).GetDefaultFilter(), m.defaultFilterDisabled)
+			return m, runQueryAndUpdateTable(m, true, false)
 		default:
 			pendingCommands := tea.Batch()
 			if m.table != nil {
@@ -309,7 +329,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			forceUpdateTable := false
 			if msg.String() == "backspace" && (m.queryInput.Value() == "" || m.queryInput.Position() == 0) {
 				// Handle deleting the default filter just for this TUI instance
-				m.queryInput.Prompt = ""
+				m.defaultFilterDisabled = true
+				m.queryInput.Prompt = promptForDefaultFilter(hctx.GetConf(m.ctx).GetDefaultFilter(), m.defaultFilterDisabled)
 				forceUpdateTable = true
 			}
 			i, cmd2 := m.queryInput.Update(msg)
@@ -582,7 +603,7 @@ var bigQueryResults []table.Row
 func makeTableColumns(ctx context.Context, shellName string, columnNames []string, rows []table.Row) ([]table.Column, error) {
 	// Handle an initial query with no results
 	if len(rows) == 0 || len(rows[0]) == 0 {
-		allRows, _, err := getRows(ctx, columnNames, shellName, hctx.GetConf(ctx).DefaultFilter, "", 25)
+		allRows, _, err := getRows(ctx, columnNames, shellName, hctx.GetConf(ctx).GetDefaultFilter(), "", 25)
 		if err != nil {
 			return nil, err
 		}
@@ -955,7 +976,7 @@ func TuiQuery(ctx context.Context, shellName string, initialQueryArray []string)
 	go func() {
 		queryId := allocateQueryId()
 		conf := hctx.GetConf(ctx)
-		rows, entries, err := getRows(ctx, conf.DisplayedColumns, shellName, conf.DefaultFilter, initialQueryWithEscaping, getNumEntriesNeeded(ctx))
+		rows, entries, err := getRows(ctx, conf.DisplayedColumns, shellName, conf.GetDefaultFilter(), initialQueryWithEscaping, getNumEntriesNeeded(ctx))
 		if err == nil || initialQueryWithEscaping == "" {
 			if err != nil {
 				panic(err)
@@ -964,7 +985,7 @@ func TuiQuery(ctx context.Context, shellName string, initialQueryArray []string)
 		} else {
 			// The initial query is likely invalid in some way, let's just drop it
 			emptyQuery := ""
-			rows, entries, err := getRows(ctx, hctx.GetConf(ctx).DisplayedColumns, shellName, conf.DefaultFilter, emptyQuery, getNumEntriesNeeded(ctx))
+			rows, entries, err := getRows(ctx, hctx.GetConf(ctx).DisplayedColumns, shellName, conf.GetDefaultFilter(), emptyQuery, getNumEntriesNeeded(ctx))
 			if err != nil {
 				panic(err)
 			}

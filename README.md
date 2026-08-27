@@ -141,6 +141,15 @@ By default, hiSHtory query will show all results for your search query. But, it 
 hishtory config-set default-filter exit_code:0
 ```
 
+The default filter can also expand `${VAR}` environment variables at search time (note the required braces; a bare `$VAR` is left as a literal). This is useful for scoping the filter to your current context, e.g. to only show commands run from the current directory:
+
+```sh
+# Note the single quotes: the variable is expanded when you search, not when you run this command
+hishtory config-set default-filter 'cwd:${PWD}'
+```
+
+While the TUI is open, `ctrl+g` toggles the default filter off and back on for that session, which is handy for a one-off search across your full history.
+
 </blockquote></details>
 
 <details>

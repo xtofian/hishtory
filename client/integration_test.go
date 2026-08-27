@@ -2664,6 +2664,21 @@ func testTui_defaultFilter(t *testing.T) {
 		"BSpace BSpace",
 	}))
 	testutils.CompareGoldens(t, out, "TestTui-DefaultFilter-DeletedWithText")
+
+	// Run a search query and toggle off the default filter
+	out = stripTuiCommandPrefix(t, captureTerminalOutput(t, tester, []string{
+		"hishtory SPACE tquery ENTER",
+		"C-g",
+	}))
+	testutils.CompareGoldens(t, out, "TestTui-DefaultFilter-Toggled")
+
+	// Run a search query and toggle the default filter off and then back on
+	out = stripTuiCommandPrefix(t, captureTerminalOutput(t, tester, []string{
+		"hishtory SPACE tquery ENTER",
+		"C-g",
+		"C-g",
+	}))
+	testutils.CompareGoldens(t, out, "TestTui-DefaultFilter-ToggledBackOn")
 }
 
 func testTui_color(t *testing.T) {

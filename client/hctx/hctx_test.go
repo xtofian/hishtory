@@ -115,9 +115,9 @@ func TestMigrationFromLegacyConfig(t *testing.T) {
 
 	// Write a pre-split combined config file with both config and state fields.
 	legacy := map[string]any{
-		"user_secret":            "legacy-secret",
-		"device_id":              "legacy-device",
-		"is_enabled":             true,
+		"user_secret":             "legacy-secret",
+		"device_id":               "legacy-device",
+		"is_enabled":              true,
 		"last_saved_history_line": "  99  ls",
 		"enable_control_r_search": true,
 		"displayed_columns":       []string{"Hostname", "Command"},
@@ -189,4 +189,65 @@ func TestMigrationIsNoOpWhenSplitFilesExist(t *testing.T) {
 	// The legacy file must be left untouched (not renamed) since no migration happened.
 	require.FileExists(t, path.Join(dir, data.LEGACY_CONFIG_PATH))
 	require.NoFileExists(t, path.Join(dir, data.LEGACY_CONFIG_PATH+".old"))
+}
+
+func TestGetDefaultFilter(t *testing.T) {
+	testcases := []struct {
+		name   string
+		filter string
+		envKey string
+		envVal string
+		setEnv bool
+		want   string
+	}{
+		{
+			name:   "expands a braced env var, escaping a colon in the value",
+			filter: "session:${HISHTORY_SESSION}",
+			envKey: "HISHTORY_SESSION",
+			envVal: "20260827.10:14.9912",
+			setEnv: true,
+			want:   `session:20260827.10\:14.9912`,
+		},
+		{
+			// os.Getenv returns "" for an unset variable, which is indistinguishable from a
+			// variable explicitly set to the empty string, so setting it to "" here deterministically
+			// exercises the same code path without depending on the ambient environment.
+			name:   "unset variable expands to the empty string",
+			filter: "session:${HISHTORY_SESSION}",
+			envKey: "HISHTORY_SESSION",
+			envVal: "",
+			setEnv: true,
+			want:   "session:",
+		},
+		{
+			name:   "a bare $VAR (no braces) is left as a literal",
+			filter: "session:$HISHTORY_SESSION",
+			envKey: "HISHTORY_SESSION",
+			envVal: "20260827.10:14.9912",
+			setEnv: true,
+			want:   "session:$HISHTORY_SESSION",
+		},
+		{
+			name:   "a value containing a space is escaped",
+			filter: "cwd:${PWD}",
+			envKey: "PWD",
+			envVal: "/tmp/my dir",
+			setEnv: true,
+			want:   `cwd:/tmp/my\ dir`,
+		},
+		{
+			name:   "an empty filter stays empty",
+			filter: "",
+			want:   "",
+		},
+	}
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setEnv {
+				t.Setenv(tc.envKey, tc.envVal)
+			}
+			config := ClientConfig{DefaultFilter: tc.filter}
+			require.Equal(t, tc.want, config.GetDefaultFilter())
+		})
+	}
 }

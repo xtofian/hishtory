@@ -25,6 +25,7 @@ type SerializableKeyMap struct {
 	JumpEndOfInput          []string
 	WordLeft                []string
 	WordRight               []string
+	ToggleDefaultFilter     []string
 }
 
 func prettifyKeyBinding(kb string) string {
@@ -126,6 +127,10 @@ func (s SerializableKeyMap) ToKeyMap() KeyMap {
 			key.WithKeys(s.WordRight...),
 			key.WithHelp(prettifyKeyBinding(s.WordRight[0]), "jump right one word "),
 		),
+		ToggleDefaultFilter: key.NewBinding(
+			key.WithKeys(s.ToggleDefaultFilter...),
+			key.WithHelp(prettifyKeyBinding(s.ToggleDefaultFilter[0]), "toggle the default filter "),
+		),
 	}
 }
 
@@ -181,6 +186,9 @@ func (s SerializableKeyMap) WithDefaults() SerializableKeyMap {
 	if len(s.WordRight) == 0 {
 		s.WordRight = DefaultKeyMap.WordRight.Keys()
 	}
+	if len(s.ToggleDefaultFilter) == 0 {
+		s.ToggleDefaultFilter = DefaultKeyMap.ToggleDefaultFilter.Keys()
+	}
 	return s
 }
 
@@ -202,6 +210,7 @@ type KeyMap struct {
 	JumpEndOfInput          key.Binding
 	WordLeft                key.Binding
 	WordRight               key.Binding
+	ToggleDefaultFilter     key.Binding
 }
 
 func (k KeyMap) ToSerializable() SerializableKeyMap {
@@ -223,6 +232,7 @@ func (k KeyMap) ToSerializable() SerializableKeyMap {
 		JumpEndOfInput:          k.JumpEndOfInput.Keys(),
 		WordLeft:                k.WordLeft.Keys(),
 		WordRight:               k.WordRight.Keys(),
+		ToggleDefaultFilter:     k.ToggleDefaultFilter.Keys(),
 	}
 }
 
@@ -243,7 +253,7 @@ func (k KeyMap) ShortHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{fakeTitleKeyBinding, k.Up, k.Left, k.SelectEntry, k.SelectEntryAndChangeDir},
-		{fakeEmptyKeyBinding, k.Down, k.Right, k.DeleteEntry},
+		{fakeEmptyKeyBinding, k.Down, k.Right, k.DeleteEntry, k.ToggleDefaultFilter},
 		{fakeEmptyKeyBinding, k.PageUp, k.TableLeft, k.Quit},
 		{fakeEmptyKeyBinding, k.PageDown, k.TableRight, k.Help},
 	}
@@ -322,5 +332,9 @@ var DefaultKeyMap = KeyMap{
 	WordRight: key.NewBinding(
 		key.WithKeys("ctrl+right"),
 		key.WithHelp("ctrl+right", "jump right one word "),
+	),
+	ToggleDefaultFilter: key.NewBinding(
+		key.WithKeys("ctrl+g"),
+		key.WithHelp("ctrl+g", "toggle the default filter "),
 	),
 }

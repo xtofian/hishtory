@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -263,6 +265,32 @@ type ClientConfig struct {
 	// Columns that are used for default searches.
 	// See https://github.com/ddworken/hishtory/issues/268 for context on this.
 	DefaultSearchColumns []string `json:"default_search_columns"`
+}
+
+var defaultFilterEnvVarRegex = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}`)
+
+// GetDefaultFilter returns the configured default filter with environment variables expanded,
+// so that filters like `session:${HISHTORY_SESSION}` can scope results to the current shell.
+// Only the braced `${VAR}` form is expanded; a bare `$VAR` is left as a literal.
+func (c *ClientConfig) GetDefaultFilter() string {
+	return defaultFilterEnvVarRegex.ReplaceAllStringFunc(c.DefaultFilter, func(match string) string {
+		name := match[2 : len(match)-1]
+		return escapeSearchValue(os.Getenv(name))
+	})
+}
+
+// escapeSearchValue backslash-escapes characters that are meaningful to the search query
+// tokenizer (space, colon, backslash, and a leading dash) so that an expanded environment
+// variable's value round-trips through tokenize/unescape as a single, literal value.
+func escapeSearchValue(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if r == '\\' || r == ' ' || r == ':' || (r == '-' && i == 0) {
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 type ColorScheme struct {
