@@ -41,6 +41,8 @@ Both support the same query format, see the below annotated queries:
 | `service before:2022-02-01` | Find all commands containing `service` run before February 1st 2022 |
 | `service after:2022-02-01` | Find all commands containing `service` run after February 1st 2022 |
 
+Queries can also be run non-interactively via `hishtory export <query>`, which prints just the raw matching commands. Add `--format=jsonl` (e.g. `hishtory export --format=jsonl after:2022-02-01`) to instead print one JSON object per line containing the full history entry, which is handy for scripted analysis of your history.
+
 For true power users, you can even query directly in SQLite via `sqlite3 -cmd 'PRAGMA journal_mode = WAL' ~/.hishtory/.hishtory.db`. 
 
 ### Enable/Disable
