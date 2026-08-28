@@ -294,8 +294,10 @@ func getPidofCommand() string {
 
 func makeTestOnlyContextWithFakeConfig() context.Context {
 	fakeConfig := hctx.ClientConfig{
-		UserSecret: "FAKE_TEST_DEVICE",
-		DeviceId:   "FAKE_TEST_DEVICE",
+		ClientState: hctx.ClientState{
+			UserSecret: "FAKE_TEST_DEVICE",
+			DeviceId:   "FAKE_TEST_DEVICE",
+		},
 	}
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, hctx.ConfigCtxKey, &fakeConfig)

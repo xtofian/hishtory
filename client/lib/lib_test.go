@@ -380,6 +380,26 @@ func TestParseNonAtomizedToken(t *testing.T) {
 	require.Equal(t, args[0], "%echo hello%")
 }
 
+func TestParseAtomizedTokenAliases(t *testing.T) {
+	defer testutils.BackupAndRestore(t)()
+	require.NoError(t, hctx.InitConfig())
+	ctx := hctx.MakeContext()
+
+	testcases := []struct{ alias, canonical string }{
+		{"d:/tmp", "cwd:/tmp"},
+		{"host:x1", "hostname:x1"},
+	}
+	for _, tc := range testcases {
+		aliasQuery, aliasArg1, aliasArg2, err := parseAtomizedToken(ctx, tc.alias)
+		require.NoError(t, err)
+		canonicalQuery, canonicalArg1, canonicalArg2, err := parseAtomizedToken(ctx, tc.canonical)
+		require.NoError(t, err)
+		require.Equal(t, canonicalQuery, aliasQuery, "'%s' should be equivalent to '%s'", tc.alias, tc.canonical)
+		require.Equal(t, canonicalArg1, aliasArg1)
+		require.Equal(t, canonicalArg2, aliasArg2)
+	}
+}
+
 func TestWhere(t *testing.T) {
 	defer testutils.BackupAndRestore(t)()
 	require.NoError(t, hctx.InitConfig())
@@ -404,5 +424,52 @@ func TestWhere(t *testing.T) {
 		})
 		require.Equal(t, tc.expected_query, queryString)
 
+	}
+}
+
+// TestDefaultFilterEnvExpansionEscaping is the test that actually protects the escaping contract
+// of hctx.ClientConfig.GetDefaultFilter(): a default filter like `cwd:${PWD}` must expand to a
+// query that MakeWhereQueryFromSearch parses back into a single search atom carrying the original,
+// unescaped environment variable value -- not one that gets split into multiple atoms/tokens by the
+// space or colon the value happens to contain.
+func TestDefaultFilterEnvExpansionEscaping(t *testing.T) {
+	defer testutils.BackupAndRestore(t)()
+	require.NoError(t, hctx.InitConfig())
+	ctx := hctx.MakeContext()
+	db := hctx.GetDb(ctx)
+
+	testcases := []struct {
+		name   string
+		filter string
+		envKey string
+		envVal string
+	}{
+		{
+			name:   "a colon-containing value stays a single atom",
+			filter: "host:${HISHTORY_SESSION}",
+			envKey: "HISHTORY_SESSION",
+			envVal: "20260827.10:14.9912",
+		},
+		{
+			name:   "a space-containing value stays a single atom",
+			filter: "cwd:${PWD}",
+			envKey: "PWD",
+			envVal: "/tmp/my dir",
+		},
+	}
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.envKey, tc.envVal)
+			config := hctx.ClientConfig{DefaultFilter: tc.filter}
+			expanded := config.GetDefaultFilter()
+
+			tx, err := MakeWhereQueryFromSearch(ctx, db, expanded)
+			require.NoError(t, err)
+			queryString := tx.ToSQL(func(tx *gorm.DB) *gorm.DB {
+				var entries []data.HistoryEntry
+				return tx.Find(&entries)
+			})
+			require.Contains(t, queryString, tc.envVal, "the escaped filter should round-trip through the tokenizer back into a single atom with the original, unescaped value")
+		})
 	}
 }

@@ -79,6 +79,9 @@ type model struct {
 
 	// The search box for the query
 	queryInput textinput.Model
+	// Whether the default filter has been toggled off for this TUI instance (see the
+	// ToggleDefaultFilter keybinding).
+	defaultFilterDisabled bool
 	// The query to run. Reset to nil after it was run.
 	runQuery *string
 	// The previous query that was run.
@@ -133,10 +136,8 @@ func initialModel(ctx context.Context, shellName, initialQuery string) model {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	queryInput := textinput.New()
 	cfg := hctx.GetConf(ctx)
-	defaultFilter := cfg.DefaultFilter
-	if defaultFilter != "" {
-		queryInput.Prompt = "[" + defaultFilter + "] "
-	}
+	defaultFilter := cfg.GetDefaultFilter()
+	queryInput.Prompt = promptForDefaultFilter(defaultFilter, false)
 	queryInput.PromptStyle = queryInput.PlaceholderStyle
 	if defaultFilter == "" {
 		queryInput.Placeholder = "ls"
@@ -155,6 +156,25 @@ func initialModel(ctx context.Context, shellName, initialQuery string) model {
 	}
 	CURRENT_QUERY_FOR_HIGHLIGHTING = initialQuery
 	return model{ctx: ctx, spinner: s, isLoading: true, table: nil, tableEntries: []*data.HistoryEntry{}, runQuery: &initialQuery, queryInput: queryInput, help: help.New(), shellName: shellName, hasFinishedFirstLoad: false}
+}
+
+// promptForDefaultFilter returns the text input prompt to show for the given (already-expanded)
+// default filter: empty when there is no filter configured or it has been toggled off for this
+// TUI instance, otherwise the filter in brackets.
+func promptForDefaultFilter(defaultFilter string, disabled bool) string {
+	if disabled || defaultFilter == "" {
+		return ""
+	}
+	return "[" + defaultFilter + "] "
+}
+
+// activeDefaultFilter returns the default filter to apply to searches, or the empty string if
+// the default filter has been toggled off for this TUI instance.
+func (m model) activeDefaultFilter() string {
+	if m.defaultFilterDisabled {
+		return ""
+	}
+	return hctx.GetConf(m.ctx).GetDefaultFilter()
 }
 
 func (m model) Init() tea.Cmd {
@@ -211,11 +231,7 @@ func runQueryAndUpdateTable(m model, forceUpdateTable, maintainCursor bool) tea.
 		}
 		queryId := allocateQueryId()
 		conf := hctx.GetConf(m.ctx)
-		defaultFilter := conf.DefaultFilter
-		if m.queryInput.Prompt == "" {
-			// The default filter was cleared for this session, so don't apply it
-			defaultFilter = ""
-		}
+		defaultFilter := m.activeDefaultFilter()
 
 		// Kick off an async query to getRows() so that we can start our DB query in the background
 		// before bubbletea actually invokes our tea.Msg. This reduces latency between key presses
@@ -296,6 +312,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case key.Matches(msg, loadedKeyBindings.ToggleDefaultFilter):
+			m.defaultFilterDisabled = !m.defaultFilterDisabled
+			m.queryInput.Prompt = promptForDefaultFilter(hctx.GetConf(m.ctx).GetDefaultFilter(), m.defaultFilterDisabled)
+			return m, runQueryAndUpdateTable(m, true, false)
 		default:
 			pendingCommands := tea.Batch()
 			if m.table != nil {
@@ -309,7 +329,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			forceUpdateTable := false
 			if msg.String() == "backspace" && (m.queryInput.Value() == "" || m.queryInput.Position() == 0) {
 				// Handle deleting the default filter just for this TUI instance
-				m.queryInput.Prompt = ""
+				m.defaultFilterDisabled = true
+				m.queryInput.Prompt = promptForDefaultFilter(hctx.GetConf(m.ctx).GetDefaultFilter(), m.defaultFilterDisabled)
 				forceUpdateTable = true
 			}
 			i, cmd2 := m.queryInput.Update(msg)
@@ -432,7 +453,7 @@ func (m model) View() string {
 	if isCompactHeightMode(m.ctx) {
 		additionalSpacing = ""
 	}
-	return fmt.Sprintf("%s%s%s%sSearch Query: %s\n%s%s\n", additionalSpacing, additionalMessagesStr, m.banner, additionalSpacing, m.queryInput.View(), additionalSpacing, renderNullableTable(m, helpView)) + helpView
+	return fmt.Sprintf("%s%s%s%sSearch Query: %s\n%s%s%s\n", additionalSpacing, additionalMessagesStr, m.banner, additionalSpacing, m.queryInput.View(), additionalSpacing, renderPreview(m), renderNullableTable(m, helpView)) + helpView
 }
 
 func isExtraCompactHeightMode(ctx context.Context) bool {
@@ -582,7 +603,7 @@ var bigQueryResults []table.Row
 func makeTableColumns(ctx context.Context, shellName string, columnNames []string, rows []table.Row) ([]table.Column, error) {
 	// Handle an initial query with no results
 	if len(rows) == 0 || len(rows[0]) == 0 {
-		allRows, _, err := getRows(ctx, columnNames, shellName, hctx.GetConf(ctx).DefaultFilter, "", 25)
+		allRows, _, err := getRows(ctx, columnNames, shellName, hctx.GetConf(ctx).GetDefaultFilter(), "", 25)
 		if err != nil {
 			return nil, err
 		}
@@ -722,6 +743,7 @@ func makeTable(ctx context.Context, shellName string, rows []table.Row) (table.M
 	if isExtraCompactHeightMode(ctx) {
 		tuiSize -= 3
 	}
+	tuiSize += getPreviewHeight(ctx)
 	tableHeight := min(getTableHeight(ctx), terminalHeight-tuiSize)
 	t := table.New(
 		table.WithColumns(columns),
@@ -955,7 +977,7 @@ func TuiQuery(ctx context.Context, shellName string, initialQueryArray []string)
 	go func() {
 		queryId := allocateQueryId()
 		conf := hctx.GetConf(ctx)
-		rows, entries, err := getRows(ctx, conf.DisplayedColumns, shellName, conf.DefaultFilter, initialQueryWithEscaping, getNumEntriesNeeded(ctx))
+		rows, entries, err := getRows(ctx, conf.DisplayedColumns, shellName, conf.GetDefaultFilter(), initialQueryWithEscaping, getNumEntriesNeeded(ctx))
 		if err == nil || initialQueryWithEscaping == "" {
 			if err != nil {
 				panic(err)
@@ -964,7 +986,7 @@ func TuiQuery(ctx context.Context, shellName string, initialQueryArray []string)
 		} else {
 			// The initial query is likely invalid in some way, let's just drop it
 			emptyQuery := ""
-			rows, entries, err := getRows(ctx, hctx.GetConf(ctx).DisplayedColumns, shellName, conf.DefaultFilter, emptyQuery, getNumEntriesNeeded(ctx))
+			rows, entries, err := getRows(ctx, hctx.GetConf(ctx).DisplayedColumns, shellName, conf.GetDefaultFilter(), emptyQuery, getNumEntriesNeeded(ctx))
 			if err != nil {
 				panic(err)
 			}
@@ -1013,3 +1035,73 @@ func TuiQuery(ctx context.Context, shellName string, initialQueryArray []string)
 
 // TODO: support custom key bindings
 // TODO: make the help page wrap
+
+// getPreviewHeight returns the number of lines reserved for the preview of the highlighted entry
+// that is rendered between the search query and the results table. It is a fixed number of lines so
+// that the table doesn't jump around as the cursor moves between entries of differing lengths.
+// It is deliberately keyed off the actual terminal height rather than the compact height modes:
+// those trim chrome (the banner and the help bar), whereas the preview is content.
+func getPreviewHeight(ctx context.Context) int {
+	_, terminalHeight, err := getTerminalSize()
+	if err != nil {
+		hctx.GetLogger().Warnf("getTerminalSize() return err=%v, assuming the terminal is reasonably tall", err)
+		return 5
+	}
+	if terminalHeight < 15 {
+		// Only enough room for the command and the CWD on one line each
+		return 2
+	}
+	if terminalHeight < 25 {
+		return 3
+	}
+	return 5
+}
+
+// renderPreview renders the full command and current working directory of the highlighted entry,
+// wrapping long values rather than truncating them like the table does. It always renders exactly
+// getPreviewHeight(m.ctx) lines, padding with blank lines when the entry is shorter than that.
+func renderPreview(m model) string {
+	height := getPreviewHeight(m.ctx)
+	width, _, err := getTerminalSize()
+	if err != nil {
+		hctx.GetLogger().Warnf("getTerminalSize() return err=%#v, defaulting the preview to a width of 80", err)
+		width = 80
+	}
+	lines := make([]string, 0, height)
+	if m.table != nil && m.table.Cursor() >= 0 && m.table.Cursor() < len(m.tableEntries) {
+		entry := m.tableEntries[m.table.Cursor()]
+		// Reserve at least one line for the CWD so that a long command can't push it off-screen.
+		commandLines := wrapWithLabel("Command: ", entry.Command, width, height-1)
+		lines = append(lines, commandLines...)
+		lines = append(lines, wrapWithLabel("    CWD: ", entry.CurrentWorkingDirectory, width, height-len(commandLines))...)
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// wrapWithLabel renders `label + value` wrapped to the given width, indenting continuation lines by
+// the width of the label. It returns at most maxLines lines, with the last one ending in an ellipsis
+// if the value didn't fit.
+func wrapWithLabel(label, value string, width, maxLines int) []string {
+	value = strings.ReplaceAll(strings.ReplaceAll(value, "\r\n", " "), "\n", " ")
+	contentWidth := max(width-len(label), 1)
+	indent := strings.Repeat(" ", len(label))
+	lines := make([]string, 0, maxLines)
+	runes := []rune(value)
+	for i := 0; i < len(runes) || len(lines) == 0; i += contentWidth {
+		if len(lines) == maxLines {
+			// The value didn't fit, so mark the last line that we did render as truncated.
+			lastLine := []rune(lines[maxLines-1])
+			lines[maxLines-1] = string(lastLine[:max(len(lastLine)-1, 0)]) + "…"
+			break
+		}
+		prefix := indent
+		if len(lines) == 0 {
+			prefix = label
+		}
+		lines = append(lines, prefix+string(runes[i:min(i+contentWidth, len(runes))]))
+	}
+	return lines
+}

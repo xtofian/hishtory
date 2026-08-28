@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -23,6 +25,7 @@ var EXAMPLE_QUERIES string = `Example queries:
 'hishtory SUBCOMMAND apt-get'  		# Find shell commands containing 'apt-get'
 'hishtory SUBCOMMAND apt-get install'  	# Find shell commands containing 'apt-get' and 'install'
 'hishtory SUBCOMMAND curl cwd:/tmp/'  	# Find shell commands containing 'curl' run in '/tmp/'
+'hishtory SUBCOMMAND curl d:/tmp/'  	# Same as above, 'd:' is a short alias for 'cwd:'
 'hishtory SUBCOMMAND curl user:david'	# Find shell commands containing 'curl' run by 'david'
 'hishtory SUBCOMMAND curl host:x1'		# Find shell commands containing 'curl' run on 'x1'
 'hishtory SUBCOMMAND exit_code:1'		# Find shell commands that exited with status code 1
@@ -70,13 +73,53 @@ var exportCmd = &cobra.Command{
 	Use:                "export",
 	Short:              "Export your shell history and display just the raw commands",
 	GroupID:            GROUP_ID_QUERYING,
-	Long:               strings.ReplaceAll(EXAMPLE_QUERIES, "SUBCOMMAND", "export"),
+	Long:               strings.ReplaceAll(EXAMPLE_QUERIES, "SUBCOMMAND", "export") + "\nBy default, only the raw commands are printed. Use `--format=jsonl` to print one JSON object per line with the full history entry (e.g. `hishtory export --format=jsonl after:2022-02-01`).\n",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := hctx.MakeContext()
+		format, args, err := extractExportFormat(args)
+		lib.CheckFatalError(err)
 		lib.CheckFatalError(lib.ProcessDeletionRequests(ctx))
-		export(ctx, strings.Join(args, " "))
+		export(ctx, strings.Join(args, " "), format)
 	},
+}
+
+type exportFormat string
+
+const (
+	exportFormatText  exportFormat = "text"
+	exportFormatJsonl exportFormat = "jsonl"
+)
+
+// extractExportFormat parses the --format flag out of the given args, and returns the remaining
+// args (which make up the search query). Note that we have to do this manually since the export
+// command has flag parsing disabled so that search queries can contain arbitrary text.
+func extractExportFormat(args []string) (exportFormat, []string, error) {
+	format := exportFormatText
+	remainingArgs := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		var val string
+		if strings.HasPrefix(arg, "--format=") {
+			val = strings.TrimPrefix(arg, "--format=")
+		} else if arg == "--format" {
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("flag needs an argument: --format")
+			}
+			i++
+			val = args[i]
+		} else {
+			remainingArgs = append(remainingArgs, arg)
+			continue
+		}
+		switch exportFormat(val) {
+		case exportFormatText, exportFormatJsonl:
+			format = exportFormat(val)
+		default:
+			return "", nil, fmt.Errorf("unsupported export format '%s' (supported formats: text, jsonl)", val)
+		}
+	}
+	return format, remainingArgs, nil
 }
 
 var getColorSupportCmd = &cobra.Command{
@@ -132,7 +175,7 @@ var updateLocalDbFromRemoteCmd = &cobra.Command{
 	},
 }
 
-func export(ctx context.Context, query string) {
+func export(ctx context.Context, query string, format exportFormat) {
 	db := hctx.GetDb(ctx)
 	err := lib.RetrieveAdditionalEntriesFromRemote(ctx, "export")
 	if err != nil {
@@ -142,11 +185,19 @@ func export(ctx context.Context, query string) {
 			lib.CheckFatalError(err)
 		}
 	}
-	data, err := lib.Search(ctx, db, query, 0)
+	entries, err := lib.Search(ctx, db, query, 0)
 	lib.CheckFatalError(err)
-	for i := len(data) - 1; i >= 0; i-- {
-		fmt.Println(data[i].Command)
+	out := bufio.NewWriter(os.Stdout)
+	for i := len(entries) - 1; i >= 0; i-- {
+		if format == exportFormatJsonl {
+			serialized, err := json.Marshal(entries[i])
+			lib.CheckFatalError(err)
+			fmt.Fprintln(out, string(serialized))
+		} else {
+			fmt.Fprintln(out, entries[i].Command)
+		}
 	}
+	lib.CheckFatalError(out.Flush())
 }
 
 func query(ctx context.Context, query string) {

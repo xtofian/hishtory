@@ -356,7 +356,7 @@ func buildPreArgsHistoryEntry(ctx context.Context) (*data.HistoryEntry, error) {
 	entry.HomeDirectory = homedir
 
 	// hostname
-	hostname, err := os.Hostname()
+	hostname, err := lib.Hostname()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build history entry: %w", err)
 	}

@@ -1077,6 +1077,14 @@ hishtory disable`)
 		t.Fatalf("hishtory query has the wrong number of lines=%d, out=%#v", strings.Count(out, "\n"), out)
 	}
 
+	// And again, but with the d: alias for cwd:
+	out = hishtoryQuery(t, tester, `d:/tmp`)
+	require.Contains(t, out, "echo querybydir", "hishtory query doesn't contain result matching d:/tmp")
+	require.NotContains(t, out, "nevershouldappear")
+	if strings.Count(out, "\n") != 4 {
+		t.Fatalf("hishtory query has the wrong number of lines=%d, out=%#v", strings.Count(out, "\n"), out)
+	}
+
 	// Query based on cwd without the slash
 	out = hishtoryQuery(t, tester, `cwd:tmp`)
 	require.Contains(t, out, "echo querybydir")
@@ -2664,6 +2672,21 @@ func testTui_defaultFilter(t *testing.T) {
 		"BSpace BSpace",
 	}))
 	testutils.CompareGoldens(t, out, "TestTui-DefaultFilter-DeletedWithText")
+
+	// Run a search query and toggle off the default filter
+	out = stripTuiCommandPrefix(t, captureTerminalOutput(t, tester, []string{
+		"hishtory SPACE tquery ENTER",
+		"C-g",
+	}))
+	testutils.CompareGoldens(t, out, "TestTui-DefaultFilter-Toggled")
+
+	// Run a search query and toggle the default filter off and then back on
+	out = stripTuiCommandPrefix(t, captureTerminalOutput(t, tester, []string{
+		"hishtory SPACE tquery ENTER",
+		"C-g",
+		"C-g",
+	}))
+	testutils.CompareGoldens(t, out, "TestTui-DefaultFilter-ToggledBackOn")
 }
 
 func testTui_color(t *testing.T) {

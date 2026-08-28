@@ -79,7 +79,7 @@ var setBetaModeCommand = &cobra.Command{
 
 var setDefaultFilterCommand = &cobra.Command{
 	Use:   "default-filter",
-	Short: "Add a default filter that will be applied to all search queries (e.g. `exit_code:0` to filter to only commands that executed successfully)",
+	Short: "Add a default filter that will be applied to all search queries (e.g. `exit_code:0` to filter to only commands that executed successfully). Supports expanding `${VAR}` environment variables at search time (e.g. `cwd:${PWD}`); bare `$VAR` is left as a literal",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := hctx.MakeContext()

@@ -36,10 +36,13 @@ Both support the same query format, see the below annotated queries:
 | `psql` | Find all commands containing `psql` |
 | `psql db.example.com` | Find all commands containing `psql` and `db.example.com` |
 | `"docker run" hostname:my-server` | Find all commands containing `docker run` that were run on the computer with hostname `my-server` |
+| `ls d:/tmp` | Find all commands containing `ls` that were run in `/tmp` (`d:` is a short alias for `cwd:`) |
 | `nano user:root` | Find all commands containing `nano` that were run as `root` |
 | `exit_code:127` | Find all commands that exited with code `127` |
 | `service before:2022-02-01` | Find all commands containing `service` run before February 1st 2022 |
 | `service after:2022-02-01` | Find all commands containing `service` run after February 1st 2022 |
+
+Queries can also be run non-interactively via `hishtory export <query>`, which prints just the raw matching commands. Add `--format=jsonl` (e.g. `hishtory export --format=jsonl after:2022-02-01`) to instead print one JSON object per line containing the full history entry, which is handy for scripted analysis of your history.
 
 For true power users, you can even query directly in SQLite via `sqlite3 -cmd 'PRAGMA journal_mode = WAL' ~/.hishtory/.hishtory.db`. 
 
@@ -140,6 +143,15 @@ By default, hiSHtory query will show all results for your search query. But, it 
 ```
 hishtory config-set default-filter exit_code:0
 ```
+
+The default filter can also expand `${VAR}` environment variables at search time (note the required braces; a bare `$VAR` is left as a literal). This is useful for scoping the filter to your current context, e.g. to only show commands run from the current directory:
+
+```sh
+# Note the single quotes: the variable is expanded when you search, not when you run this command
+hishtory config-set default-filter 'cwd:${PWD}'
+```
+
+While the TUI is open, `ctrl+g` toggles the default filter off and back on for that session, which is handy for a one-off search across your full history.
 
 </blockquote></details>
 

@@ -21,8 +21,14 @@ import (
 const (
 	KdfUserID        = "user_id"
 	KdfEncryptionKey = "encryption_key"
-	CONFIG_PATH      = ".hishtory.config"
-	DB_PATH          = ".hishtory.db"
+	// CONFIG_PATH is the VCS-friendly settings file: pretty-printed, with no secrets or volatile state.
+	CONFIG_PATH = "config.json"
+	// STATE_PATH holds per-installation and volatile state (user secret, device ID, sync bookkeeping).
+	STATE_PATH = "state.json"
+	// LEGACY_CONFIG_PATH is the pre-split single file that mixed config and state. It is migrated
+	// into CONFIG_PATH + STATE_PATH on first run and then renamed to LEGACY_CONFIG_PATH+".old".
+	LEGACY_CONFIG_PATH = ".hishtory.config"
+	DB_PATH            = ".hishtory.db"
 )
 
 const (

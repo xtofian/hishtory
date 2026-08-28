@@ -8,7 +8,10 @@ fmt:				## Format all files
 	gci write --custom-order -s standard -s 'Prefix(github.com/ddworken/hishtory)' -s default .
 
 local-install:			## Build and install hishtory locally from the current directory
-	go build; ./hishtory install
+	go build; ./hishtory install --skip-config-modification --skip-update-config-modification
+
+dev-build:			## Build hishtory locally with the commit hash and build timestamp baked in
+	go build -ldflags "$$(./scripts/dev-ldflags)"
 
 forcetest:			## Force running all tests without a test cache
 	go clean -testcache

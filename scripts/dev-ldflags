@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# Emit -ldflags for a local dev build, baking in the current commit, VERSION, and a build timestamp.
+# Unlike scripts/client-ldflags (used for releases), this prefers the jj working-copy commit so the
+# stamped hash reflects exactly what is being built, and it does not strip debug info.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Prefer the jj working-copy commit (reflects uncommitted edits) when this is a jj repo; otherwise
+# fall back to the git HEAD commit.
+if command -v jj >/dev/null 2>&1 && jj root >/dev/null 2>&1; then
+	GIT_HASH=$(jj log --no-graph -r @ -T 'commit_id')
+else
+	GIT_HASH=$(git rev-parse HEAD)
+fi
+
+BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+PKG=github.com/ddworken/hishtory/client/lib
+
+echo "-X $PKG.GitCommit=$GIT_HASH -X $PKG.Version=$(cat VERSION)-dev-$GIT_HASH -X $PKG.BuildTimestamp=$BUILD_TIMESTAMP"

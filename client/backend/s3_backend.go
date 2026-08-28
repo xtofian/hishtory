@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/ddworken/hishtory/shared"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -45,6 +48,16 @@ type S3Backend struct {
 	userId string // derived from user secret, used as folder name
 }
 
+// Wrap http signer to intercept header right before signing, used for Google Cloud Storage compatibility in NewS3Backend.
+type gcsHttpSigner struct {
+	wrapped s3.HTTPSignerV4
+}
+
+func (s *gcsHttpSigner) SignHTTP(ctx context.Context, credentials aws.Credentials, req *http.Request, payloadHash string, service string, region string, signingTime time.Time, optFns ...func(*v4.SignerOptions)) error {
+	req.Header.Del("Accept-Encoding")
+	return s.wrapped.SignHTTP(ctx, credentials, req, payloadHash, service, region, signingTime, optFns...)
+}
+
 // NewS3Backend creates a new S3 backend with the given configuration.
 func NewS3Backend(ctx context.Context, cfg *S3Config, userId string) (*S3Backend, error) {
 	if err := cfg.Validate(); err != nil {
@@ -73,7 +86,21 @@ func NewS3Backend(ctx context.Context, cfg *S3Config, userId string) (*S3Backend
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 			o.UsePathStyle = true // Required for MinIO and most S3-compatible services
+
+			// Settings for Google Cloud Storage compatibility.
+			if strings.HasSuffix(cfg.Endpoint, ".googleapis.com") {
+				// Exclude Accept-Encoding from signature, see https://github.com/aws/aws-sdk-go-v2/issues/1816#issuecomment-4526752227.
+				o.HTTPSignerV4 = &gcsHttpSigner{wrapped: o.HTTPSignerV4}
+				o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			}
 		})
+	}
+
+	if os.Getenv("HISHTORY_S3_DEBUG") != "" {
+		s3Opts = append(s3Opts, func(o *s3.Options) {
+			o.ClientLogMode = aws.LogRequest | aws.LogResponse | aws.LogSigning
+		})
+
 	}
 
 	client := s3.NewFromConfig(awsCfg, s3Opts...)
