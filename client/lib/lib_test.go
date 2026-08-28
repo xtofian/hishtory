@@ -380,6 +380,26 @@ func TestParseNonAtomizedToken(t *testing.T) {
 	require.Equal(t, args[0], "%echo hello%")
 }
 
+func TestParseAtomizedTokenAliases(t *testing.T) {
+	defer testutils.BackupAndRestore(t)()
+	require.NoError(t, hctx.InitConfig())
+	ctx := hctx.MakeContext()
+
+	testcases := []struct{ alias, canonical string }{
+		{"d:/tmp", "cwd:/tmp"},
+		{"host:x1", "hostname:x1"},
+	}
+	for _, tc := range testcases {
+		aliasQuery, aliasArg1, aliasArg2, err := parseAtomizedToken(ctx, tc.alias)
+		require.NoError(t, err)
+		canonicalQuery, canonicalArg1, canonicalArg2, err := parseAtomizedToken(ctx, tc.canonical)
+		require.NoError(t, err)
+		require.Equal(t, canonicalQuery, aliasQuery, "'%s' should be equivalent to '%s'", tc.alias, tc.canonical)
+		require.Equal(t, canonicalArg1, aliasArg1)
+		require.Equal(t, canonicalArg2, aliasArg2)
+	}
+}
+
 func TestWhere(t *testing.T) {
 	defer testutils.BackupAndRestore(t)()
 	require.NoError(t, hctx.InitConfig())

@@ -1077,6 +1077,14 @@ hishtory disable`)
 		t.Fatalf("hishtory query has the wrong number of lines=%d, out=%#v", strings.Count(out, "\n"), out)
 	}
 
+	// And again, but with the d: alias for cwd:
+	out = hishtoryQuery(t, tester, `d:/tmp`)
+	require.Contains(t, out, "echo querybydir", "hishtory query doesn't contain result matching d:/tmp")
+	require.NotContains(t, out, "nevershouldappear")
+	if strings.Count(out, "\n") != 4 {
+		t.Fatalf("hishtory query has the wrong number of lines=%d, out=%#v", strings.Count(out, "\n"), out)
+	}
+
 	// Query based on cwd without the slash
 	out = hishtoryQuery(t, tester, `cwd:tmp`)
 	require.Contains(t, out, "echo querybydir")

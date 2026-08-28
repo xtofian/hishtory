@@ -36,6 +36,7 @@ Both support the same query format, see the below annotated queries:
 | `psql` | Find all commands containing `psql` |
 | `psql db.example.com` | Find all commands containing `psql` and `db.example.com` |
 | `"docker run" hostname:my-server` | Find all commands containing `docker run` that were run on the computer with hostname `my-server` |
+| `ls d:/tmp` | Find all commands containing `ls` that were run in `/tmp` (`d:` is a short alias for `cwd:`) |
 | `nano user:root` | Find all commands containing `nano` that were run as `root` |
 | `exit_code:127` | Find all commands that exited with code `127` |
 | `service before:2022-02-01` | Find all commands containing `service` run before February 1st 2022 |

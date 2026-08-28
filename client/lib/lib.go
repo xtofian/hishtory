@@ -1031,6 +1031,8 @@ func parseAtomizedToken(ctx context.Context, token string) (string, any, any, er
 		fallthrough
 	case "hostname":
 		return "(instr(hostname, ?) > 0)", val, nil, nil
+	case "d":
+		fallthrough
 	case "cwd":
 		return "(instr(current_working_directory, ?) > 0 OR instr(REPLACE(current_working_directory, '~/', home_directory), ?) > 0)", strings.TrimSuffix(val, "/"), strings.TrimSuffix(val, "/"), nil
 	case "exit_code":
